@@ -5,8 +5,17 @@
 #include <ctype.h>
 #include "wordlist.h"
 
+#define BLOCK_SIZE 100
+#define INITIAL_BUF_SIZE 10
+
 // Специальные слова
 char *special_words[] = {"||", ">>", "&&", "|", ">", "<", ";", "(", ")", NULL};
+
+// Глобальные переменные для чтения блоков
+static char block[BLOCK_SIZE + 1];
+static int block_pos = 0;
+static int block_len = 0;
+static int eof_reached = 0;
 
 // Инициализация списка
 void init_list(WordList *list) {
@@ -21,10 +30,9 @@ void init_list(WordList *list) {
 
 // Добавление слова в список
 void add_word(WordList *list, const char *word) {
-    if (strlen(word) == 0) return;  
-	
+    if (strlen(word) == 0) return;
+    
     if (list->count >= list->capacity) {
-        // Увеличиваем емкость
         list->capacity *= 2;
         list->words = realloc(list->words, list->capacity * sizeof(char*));
         if (list->words == NULL) {
@@ -33,7 +41,6 @@ void add_word(WordList *list, const char *word) {
         }
     }
     
-    // Копируем слово
     list->words[list->count] = malloc(strlen(word) + 1);
     if (list->words[list->count] == NULL) {
         printf("Ошибка памяти\n");
@@ -51,7 +58,6 @@ void sort_list(WordList *list) {
     for (i = 0; i < list->count - 1; i++) {
         for (j = 0; j < list->count - i - 1; j++) {
             if (strcmp(list->words[j], list->words[j + 1]) > 0) {
-                // Меняем местами
                 temp = list->words[j];
                 list->words[j] = list->words[j + 1];
                 list->words[j + 1] = temp;
@@ -75,20 +81,22 @@ void free_list(WordList *list) {
     free(list->words);
 }
 
-// Проверка, является ли символ частью простого слова
-int is_simple_char(char c) {
-    return isalnum(c) || c == '$' || c == ' ' || c == '/' || c == ',';
-}
-
-// Проверка, является ли строка специальным словом
-int is_special_word(const char *str, int len) {
-    int i;
-    for (i = 0; special_words[i] != NULL; i++) {
-        if (strncmp(str, special_words[i], len) == 0 && strlen(special_words[i]) == len) {
-            return 1;
+// получение следующего символа 
+char getsym(FILE *stream) {
+    if (block_pos >= block_len) {
+        // Пытаемся прочитать блок
+        if (fscanf(stream, "%100c", block) == 1) {
+            block_len = BLOCK_SIZE;
+            block_pos = 0;
+        } else {
+            return EOF;
         }
     }
-    return 0;
+    return block[block_pos++];
+}
+// Проверка, является ли символ частью простого слова
+int is_simple_char(char c) {
+    return isalnum(c) || c == '$' || c == '\'' || c == '/' || c == ',';
 }
 
 // Получение максимальной длины специального слова
@@ -103,72 +111,132 @@ int get_max_special_len(const char *str) {
     return max_len;
 }
 
-// Обработка строки и разбиение на слова
-void process_line(const char *line, WordList *list) {
-    int i = 0;
-    int len = strlen(line);
-    char buffer[1000];
-    int buf_index = 0;
-  
-    // Пропускаем символ новой строки в конце
-    if (len > 0 && line[len-1] == '\n') {
-        len--;
+// Обработка ввода с использованием блоков
+void process_input(WordList *list) {
+    char current_char;
+    char *word_buf = NULL;
+    int buf_size = 0;
+    int buf_pos = 0;
+    
+    // Инициализация буфера для слова
+    buf_size = INITIAL_BUF_SIZE;
+    word_buf = malloc(buf_size);
+    if (word_buf == NULL) {
+        printf("Ошибка памяти\n");
+        return;
     }
-
-    while (i < len) {
-        // Пропускаем пробельные символы
-        if (isspace(line[i])) {
-            // Если в буфере есть слово, добавляем его
-            if (buf_index > 0) {
-                buffer[buf_index] = '\0';
-                add_word(list, buffer);
-                buf_index = 0;
+    
+    // Сбрасываем состояние чтения блоков
+    block_pos = 0;
+    block_len = 0;
+    eof_reached = 0;
+    
+    while (!eof_reached) {
+        // Получаем следующий символ
+        current_char = getsym(stdin);
+        
+        if (current_char == EOF) {
+            // Конец файла - обрабатываем последнее слово если есть
+            if (buf_pos > 0) {
+                word_buf[buf_pos] = '\0';
+                add_word(list, word_buf);
             }
-            i++;
+            break;
+        }
+        
+        // Обработка конца строки
+        if (current_char == '\n') {
+            if (buf_pos > 0) {
+                word_buf[buf_pos] = '\0';
+                add_word(list, word_buf);
+                buf_pos = 0;
+            }
+            
+            // Выводим результаты для текущей строки
+            if (list->count > 0) {
+                printf("%d\n", list->count);
+                
+                // Вывод в исходном порядке
+                int i;
+                for (i = 0; i < list->count; i++) {
+                    printf("%s\n", list->words[i]);
+                }
+                
+                // Сортировка и вывод в лексикографическом порядке
+                sort_list(list);
+                for (i = 0; i < list->count; i++) {
+                    printf("%s\n", list->words[i]);
+                }
+                
+                clear_list(list);
+            }
+            continue;
+        }
+        
+        // Пропускаем пробельные символы (кроме перевода строки)
+        if (isspace(current_char)) {
+            if (buf_pos > 0) {
+                word_buf[buf_pos] = '\0';
+                add_word(list, word_buf);
+                buf_pos = 0;
+            }
             continue;
         }
         
         // Проверяем специальные слова
-        int special_len = get_max_special_len(&line[i]);
+        // Создаем временную строку для проверки специальных слов
+        char temp_str[4] = {current_char, '\0', '\0', '\0'};
+        int special_len = get_max_special_len(temp_str);
+        
+        // Если это начало специального слова
         if (special_len > 0) {
-            // Если в буфере есть накопленное слово, добавляем его
-            if (buf_index > 0) {
-                buffer[buf_index] = '\0';
-                add_word(list, buffer);
-                buf_index = 0;
+            // Если было обычное слово, добавляем его
+            if (buf_pos > 0) {
+                word_buf[buf_pos] = '\0';
+                add_word(list, word_buf);
+                buf_pos = 0;
             }
             
-            // Добавляем специальное слово
-            strncpy(buffer, &line[i], special_len);
-            buffer[special_len] = '\0';
-            add_word(list, buffer);
-            i += special_len;
+            // Собираем полное специальное слово
+            char special_word[4] = {current_char, '\0', '\0', '\0'};
+            int current_len = 1;
+            
+            // Пытаемся получить более длинное специальное слово
+            for (int i = 1; i < 3; i++) {
+                if (block_pos >= block_len) break;
+                
+                special_word[i] = block[block_pos];
+                special_word[i+1] = '\0';
+                
+                int new_len = get_max_special_len(special_word);
+                if (new_len > current_len) {
+                    current_len = new_len;
+                    getsym(stdin); // Пропускаем символ так как он часть специального слова
+                } else {
+                    break;
+                }
+            }
+            
+            special_word[current_len] = '\0';
+            add_word(list, special_word);
             continue;
         }
         
-        // Обычный символ для простого слова
-        if (is_simple_char(line[i])) {
-            buffer[buf_index++] = line[i];
-            i++;
-        } else {
-            // Если встретили не-специальный и не-простой символ
-            if (buf_index > 0) {
-                buffer[buf_index] = '\0';
-                add_word(list, buffer);
-                buf_index = 0;
+        // Обычный символ - добавляем в буфер
+        // Увеличиваем буфер если нужно
+        if (buf_pos >= buf_size - 1) {
+            buf_size *= 2;
+            char *new_buf = realloc(word_buf, buf_size);
+            if (new_buf == NULL) {
+                printf("Ошибка памяти\n");
+                free(word_buf);
+                return;
             }
-            
-            // Добавляем одиночный символ как слово
-            buffer[0] = line[i];
-            buffer[1] = '\0';
-            add_word(list, buffer);
-            i++;
+            word_buf = new_buf;
         }
+        
+        word_buf[buf_pos++] = current_char;
     }
     
-    // Добавляем последнее слово, если есть
-    if (buf_index > 0) {
-        buffer[buf_index] = '\0';
-        add_word(list, buffer);
-    }
+    free(word_buf);
 }
